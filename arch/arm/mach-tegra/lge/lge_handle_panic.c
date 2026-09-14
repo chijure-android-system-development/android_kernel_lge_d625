@@ -22,7 +22,7 @@
 #include <asm/setup.h>
 #include <linux/init.h>
 #include "../board.h"
-#include <lge_handle_panic.h>
+#include "lge_handle_panic.h"
 #include <asm/cacheflush.h>
 #include <mach/nvdumper.h>
 
