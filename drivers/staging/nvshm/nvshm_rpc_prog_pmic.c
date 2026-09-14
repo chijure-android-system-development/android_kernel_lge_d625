@@ -23,7 +23,7 @@
 #include <mach/tegra_bb.h>
 #include <mach/tegra_bbc_proxy.h>
 #include "nvshm_rpc_utils.h"
-#include <nvshm_rpc_dispatcher.h>
+#include "nvshm_rpc_dispatcher.h"
 #include <nvshm_priv.h>
 
 static struct device *bbc_proxy_dev;
