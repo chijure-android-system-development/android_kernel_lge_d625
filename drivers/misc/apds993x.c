@@ -45,7 +45,12 @@
 
 #define APDS993X_PS_DETECTION_THRESHOLD		900
 #define APDS993X_PS_HSYTERESIS_THRESHOLD	800
-#define APDS993X_PS_PULSE_NUMBER			1
+/*
+ * D625 stock (apds9130): 16 pulses, 50mA LED, PS gain 2x. With 1 pulse at
+ * 1x a covered sensor only reached ~350, never the 900 threshold, so calls
+ * never blanked the screen. With stock tuning: far ~130, ear ~990-1023.
+ */
+#define APDS993X_PS_PULSE_NUMBER			16
 
 #define APDS993X_GA		271
 #define APDS993X_COE_B	231
@@ -176,7 +181,7 @@
 static int apds993x_ps_detection_threshold = APDS993X_PS_DETECTION_THRESHOLD;
 static int apds993x_ps_hsyteresis_threshold = APDS993X_PS_HSYTERESIS_THRESHOLD;
 static int apds993x_ps_pulse_number = APDS993X_PS_PULSE_NUMBER;
-static int apds993x_ps_pgain = APDS993X_PGAIN_1X; /* APDS993X_PGAIN_2X recomended */
+static int apds993x_ps_pgain = APDS993X_PGAIN_2X;
 
 typedef enum
 {
@@ -2085,7 +2090,7 @@ static int apds993x_init_client(struct i2c_client *client)
 		return err;
 
 	err = apds993x_set_control(client,
-			APDS993X_PDRVIE_100MA |
+			APDS993X_PDRVIE_50MA |
 			APDS993X_PRX_IR_DIOD |
 			apds993x_ps_pgain |
 			apds993x_als_again_bit_tb[data->als_again_index]);
