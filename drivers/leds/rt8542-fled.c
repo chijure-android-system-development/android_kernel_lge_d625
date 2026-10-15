@@ -37,10 +37,13 @@
 
 char *dname = "torch";
 
-#define RT8542_FLASH_LEVELS 2
-#define RT8542_FLASH_TIMERS 2
-#define RT8542_TORCH_LEVELS 2
-#define RT8542_TORCH_TIMERS 2
+/* HAL allocates a large EXT_*_CAPS buffer (~432 slots). Expose a modest
+ * ramp so numberoflevels/luminance are usable for flash AE; OFF remains 0.
+ */
+#define RT8542_FLASH_LEVELS 16
+#define RT8542_FLASH_TIMERS 8
+#define RT8542_TORCH_LEVELS 16
+#define RT8542_TORCH_TIMERS 8
 
 #define RT8542_FLASH_CAP_SIZE \
 	(sizeof(struct nvc_torch_flash_capabilities_v1) \
@@ -387,15 +390,20 @@ static inline int rt8542_fled_enable(struct i2c_client *i2c, int enable)
 	if (enable) {
 		rt8542_set_bits(i2c, RT8542_REG_CHEN, RT8542_FLED_EN_MASK);
 		if (finfo->external_strobe_pin) {
-			rt8542_set_bits(i2c, RT8542_REG_FLCTL2, \
+			/* Arm external-strobe input only. Driving the GPIO high
+			 * here used to fire a full 600mA+ pulse on every enable
+			 * (including torch), which browns out the PMIC (POR →
+			 * chargerlogo). Sensor SDO / explicit strobe path fires.
+			 */
+			rt8542_set_bits(i2c, RT8542_REG_FLCTL2,
 					RT8542_FLED_STROBE_MASK);
-			gpio_direction_output(finfo->strobe_gpio, 1);
+			gpio_direction_output(finfo->strobe_gpio, 0);
 		}
 	} else {
 		if (finfo->external_strobe_pin) {
-			rt8542_clr_bits(i2c, RT8542_REG_FLCTL2, \
-					RT8542_FLED_STROBE_MASK);
 			gpio_direction_output(finfo->strobe_gpio, 0);
+			rt8542_clr_bits(i2c, RT8542_REG_FLCTL2,
+					RT8542_FLED_STROBE_MASK);
 		}
 
 		rt8542_clr_bits(i2c, RT8542_REG_CHEN, RT8542_FLED_EN_MASK);
@@ -451,69 +459,54 @@ int rt8542_internal_set_fl_mode(enum fled_mode fmode)
 }
 EXPORT_SYMBOL(rt8542_internal_set_fl_mode);
 
+static void rt8542_apply_fl_brightness(struct rt8542_fled_info *fi,
+					enum led_brightness brightness)
+{
+	fi->brightness = brightness;
+
+	if (brightness) {
+		/* 255 = strobe/flash; any other non-zero = torch. Torch apps
+		 * often write mid-scale values (64/128); only 127/255 used to
+		 * be accepted, which left FLED enabled with no mode set.
+		 */
+		int strobe = brightness >= 255;
+
+		if (strobe)
+			rt8542_fled_mode(fi->i2c, fi->external_strobe_pin,
+					 FLED_MODE_STROBE);
+		else
+			rt8542_fled_mode(fi->i2c, fi->external_strobe_pin,
+					 FLED_MODE_TORCH);
+
+		if (!fi->chip->fled_en) {
+			rt8542_fled_enable(fi->i2c, 1);
+			fi->chip->fled_en = 1;
+		}
+
+		/* Assert strobe GPIO only for flash. Torch must stay low —
+		 * fled_enable used to drive GPIO high for both and POR'd.
+		 */
+		if (fi->external_strobe_pin && fi->strobe_gpio)
+			gpio_direction_output(fi->strobe_gpio, strobe ? 1 : 0);
+	} else if (fi->chip->fled_en) {
+		if (fi->external_strobe_pin && fi->strobe_gpio)
+			gpio_direction_output(fi->strobe_gpio, 0);
+		rt8542_fled_enable(fi->i2c, 0);
+		fi->chip->fled_en = 0;
+	}
+}
+
 static void rt8542_set_fl_brightness(struct led_classdev *led_cdev, \
 					enum led_brightness brightness)
 {
 	struct rt8542_fled_info *fi = dev_get_drvdata(led_cdev->dev->parent);
 
-	fi->brightness = brightness;
-
-	if (brightness) {
-		switch (brightness) {
-		case 255:
-			rt8542_fled_mode(fi->i2c, fi->external_strobe_pin, \
-						FLED_MODE_STROBE);
-			break;
-		case 127:
-			rt8542_fled_mode(fi->i2c, fi->external_strobe_pin, \
-						FLED_MODE_TORCH);
-			break;
-		default:
-			pr_err("rt8542_fled: invalid brightness");
-			break;
-		}
-		if (!fi->chip->fled_en) {
-			rt8542_fled_enable(fi->i2c, 1);
-			fi->chip->fled_en = 1;
-		}
-	} else {
-		if (fi->chip->fled_en) {
-			rt8542_fled_enable(fi->i2c, 0);
-			fi->chip->fled_en = 0;
-		}
-	}
+	rt8542_apply_fl_brightness(fi, brightness);
 }
 
 static void rt8542_set_fl_brightness2(int brightness)
 {
-	struct rt8542_fled_info *fi = finfo;
-
-	fi->brightness = brightness;
-
-	if (brightness) {
-		switch (brightness) {
-		case 255:
-			rt8542_fled_mode(fi->i2c, fi->external_strobe_pin, \
-						FLED_MODE_STROBE);
-			break;
-		case 127:
-			rt8542_fled_mode(fi->i2c, fi->external_strobe_pin, \
-						FLED_MODE_TORCH);
-			break;
-		default:
-			pr_err("rt8542_fled: invalid brightness\n");
-			break;
-		}
-		if (!fi->chip->fled_en) {
-			rt8542_fled_enable(fi->i2c, 1);
-			fi->chip->fled_en = 1;
-		}
-	} else {
-		if (fi->chip->fled_en) {
-			rt8542_fled_enable(fi->i2c, 0);
-			fi->chip->fled_en = 0;
-		}
-	}
+	rt8542_apply_fl_brightness(finfo, brightness);
 }
 
 static struct led_classdev rt8542_fled_classdev = {
@@ -596,6 +589,9 @@ static int __devinit rt8542_fled_probe(struct platform_device *pdev)
 	pfcap->led_idx = 0;
 	pfcap->attribute = 0;
 	pfcap->granularity = 1000;
+	/* Same default as as364x/max77665; 0 leaves HAL TorchBrightness at 0
+	 * and takePicture logs FlashError / skips usable flash AE. */
+	pfcap->flash_torch_ratio = 10000;
 	pfcap->timeout_num = RT8542_FLASH_TIMERS;
 	/* offset between flash_cap and timeout */
 	pfcap->timeout_off = (void *)ptmcap - (void *)pfcap;
@@ -608,7 +604,8 @@ static int __devinit rt8542_fled_probe(struct platform_device *pdev)
 			plvls[0].luminance = 0;
 		} else {
 			plvls[i].guidenum = i;
-			plvls[i].luminance = 15625 * i;
+			/* ~cd estimates; relative spacing matters more than absolute */
+			plvls[i].luminance = 20000 * i;
 		}
 	}
 
@@ -616,7 +613,7 @@ static int __devinit rt8542_fled_probe(struct platform_device *pdev)
 	ptimeout = ptmcap->timeouts;
 
 	for (i = 0; i < RT8542_FLASH_TIMERS; ++i)
-		ptimeout[i].timeout = 200;
+		ptimeout[i].timeout = 62500 * (i + 1);
 
 	fi->torch_cap = kzalloc(TORCH_EXT_CAPS_SIZE, GFP_KERNEL);
 	if (!fi->torch_cap) {
@@ -635,7 +632,6 @@ static int __devinit rt8542_fled_probe(struct platform_device *pdev)
 	ptcap->timeout_off = (void *)ptmcap - (void *)ptcap;
 	ptcap->numberoflevels = RT8542_TORCH_LEVELS;
 
-	printk(KERN_DEBUG "lumi");
 	plvls = ptcap->levels;
 	for (i = 0; i < RT8542_TORCH_LEVELS; ++i) {
 		if (0 == i) {
@@ -643,19 +639,14 @@ static int __devinit rt8542_fled_probe(struct platform_device *pdev)
 			plvls[0].luminance = 0;
 		} else {
 			plvls[i].guidenum = i;
-			plvls[i].luminance = 15625 * i;
+			plvls[i].luminance = 10000 * i;
 		}
-		printk(KERN_DEBUG "i(%d) guidenum(%d) luminance(%d)", \
-			i, plvls[i].guidenum, plvls[i].luminance);
 	}
 
-	printk("timer\n");
 	ptmcap->timeout_num = RT8542_TORCH_TIMERS;
 	ptimeout = ptmcap->timeouts;
-	for (i = 0; i < RT8542_TORCH_TIMERS; ++i) {
-		ptimeout[i].timeout = 200 * i;
-		printk(KERN_DEBUG "i(%d)timeout(%d)", i, ptimeout[i].timeout);
-	}
+	for (i = 0; i < RT8542_TORCH_TIMERS; ++i)
+		ptimeout[i].timeout = 62500 * (i + 1);
 
 	pr_info("rt8542-fled driver is successfully loaded\n");
 	return 0;

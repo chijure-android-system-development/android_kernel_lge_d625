@@ -329,13 +329,17 @@ static struct rt8542_bled_data rt8542_bled_data = {
 static struct rt8542_fled_data rt8542_fled_data = {
 	.FLED_CURR_CONTROL = {
 		.bitfield = {
-			.FLED_STROBE_CURRENT = FLED_STROBE_618mA, //Set camera flash current
-			.FLED_TORCH_CURRENT = FLED_TORCH_112mA, //Set camera torch current
+			/* Stock D62510c values; A/B with stock zImage: flash OK,
+			 * no POR. CM POR was fled_enable asserting strobe GPIO
+			 * on every enable (incl. torch), not these currents.
+			 */
+			.FLED_STROBE_CURRENT = FLED_STROBE_618mA,
+			.FLED_TORCH_CURRENT = FLED_TORCH_112mA,
 		},
 	},
 	.FLED_CONTROL1 = {
 		.bitfield = {
-			.FLED_STROBE_TIMEOUT = 0x1a, //Set camera flash timeout
+			.FLED_STROBE_TIMEOUT = 0x1a,
 			.FLED_CURRENT_LIMIT = FLED_CURR_2P5A,
 			.FLED_SW_FREQ = FLED_FREQ_2MHZ,
 		},
