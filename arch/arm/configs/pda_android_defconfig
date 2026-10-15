@@ -545,6 +545,17 @@ CONFIG_ANDROID_LOGGER=y
 CONFIG_ANDROID_RAM_CONSOLE=y
 CONFIG_ANDROID_TIMED_GPIO=y
 CONFIG_ANDROID_LOW_MEMORY_KILLER=y
+
+# Match the security and memory configuration used by the shipping D625
+# kernel.  The boot chain provides a TLK secure-world image and expects the
+# normal-world kernel to initialize its interface.
+CONFIG_TEGRA_USE_SECURE_KERNEL=y
+CONFIG_TRUSTED_LITTLE_KERNEL=y
+CONFIG_OTE_ENABLE_LOGGER=y
+CONFIG_ZSMALLOC=y
+CONFIG_ZRAM=y
+# CONFIG_ZRAM_DEBUG is not set
+# CONFIG_MMC_BLOCK_BOUNCE is not set
 CONFIG_ANDROID_INTF_ALARM_DEV=y
 CONFIG_NVSHM=y
 CONFIG_PASR=y
@@ -597,7 +608,9 @@ CONFIG_LGE_HIDDEN_RESET=y
 CONFIG_LGE_HANDLE_PANIC_CP15=y
 CONFIG_LGE_MODEM_CRASH_HANDLER=y
 # CONFIG_BACKLIGHT_PWM_CABC is not set
-CONFIG_BACKLIGHT_PWM_PRISM=y
+# CM11 lights HAL / init drive leds/lcd-backlight (RT8542). PWM_PRISM also
+# registers pwm-backlight; the HAL prefers that node and leaves the panel black.
+# CONFIG_BACKLIGHT_PWM_PRISM is not set
 CONFIG_BU52031NVX=y
 #SDENC
 CONFIG_ECRYPT_FS=y

@@ -609,14 +609,14 @@ struct tegra_dc_mode dsi_l_540p_4_7_modes_tovis_revB[] = {
 };
 
 struct tegra_dc_mode dsi_l_540p_4_7_modes_tovis[] = {
-	/* 540x960@60Hz  TOVIS*/
+	/* 540x960@60Hz TOVIS — timings from shipping D62510c zImage */
 	{
-		.pclk = 37540800,
-		.h_ref_to_sync = 0, //mdss-dsi-h-sync-pulse 0
+		.pclk = 37006200,
+		.h_ref_to_sync = 0,
 		.v_ref_to_sync = 1,
-		.h_sync_width = 40, //mdss-dsi-h-pulse-width
-		.v_sync_width = 2, //mdss-dsi-v-pulse-width
-		.h_back_porch = 32,
+		.h_sync_width = 34,
+		.v_sync_width = 2,
+		.h_back_porch = 29,
 		.h_front_porch = 20,
 		.v_back_porch = 15,
 		.v_front_porch = 13,
@@ -625,14 +625,18 @@ struct tegra_dc_mode dsi_l_540p_4_7_modes_tovis[] = {
 	},
 };
 struct tegra_dc_mode dsi_l_540p_4_7_modes_tianma[] = {
-	/* 540x960@60Hz TIANMA*/
+	/* 540x960@60Hz TIANMA — timings from shipping D62510c zImage.
+	 * GPL dump used 37507440 / hsync 44 / hbp 30, which makes DSI ask
+	 * for HS 225500 while pll_d_out0 locks at ~222.3 MHz; tegra_dc then
+	 * fails "can't divide" and immediately disables the panel (black).
+	 */
 	{
-		.pclk = 37507440,
-		.h_ref_to_sync = 0, //mdss-dsi-h-sync-pulse 2 -> 0
+		.pclk = 37034160,
+		.h_ref_to_sync = 0,
 		.v_ref_to_sync = 1,
-		.h_sync_width = 44, //mdss-dsi-h-pulse-width
-		.v_sync_width = 4, //mdss-dsi-v-pulse-width
-		.h_back_porch = 30,
+		.h_sync_width = 40,
+		.v_sync_width = 4,
+		.h_back_porch = 26,
 		.h_front_porch = 20,
 		.v_back_porch = 15,
 		.v_front_porch = 7,
@@ -803,9 +807,9 @@ static int dsi_l_540p_4_7_enable(struct device *dev)
 #endif
 #endif
 
-	/* BL on */
+	/* BL on — required for CM11 (no pwm-backlight / PRISM path). */
 //	gpio_direction_output(dsi_l_540p_4_7_pdata.dsi_panel_bl_en_gpio, 1);
-//	rt8542_bl_enable(true);
+	rt8542_bl_enable(true);
 	is_bl_powered = true;
 
 	return 0;

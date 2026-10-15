@@ -785,8 +785,9 @@ static void apds993x_change_als_threshold(struct i2c_client *client)
 	}
 
 	if (lux_is_valid) {
-		/* report the lux level */
-		input_report_abs(data->input_dev_als, ABS_LIGHT, luxValue);
+		/* Force ABS change so duplicate lux values still reach HAL. */
+		input_abs_set_val(data->input_dev_als, ABS_MISC, luxValue ? 0 : 1);
+		input_report_abs(data->input_dev_als, ABS_MISC, luxValue);
 		input_sync(data->input_dev_als);
 	}
 
@@ -931,8 +932,12 @@ static void apds993x_als_polling_work_handler(struct work_struct *work)
 	}
 
 	if (lux_is_valid) {
-		/* report the lux level */
-		input_report_abs(data->input_dev_als, ABS_LIGHT, luxValue);
+		/*
+		 * input_report_abs() drops unchanged values; force a change
+		 * so userspace keeps getting ALS samples for auto-brightness.
+		 */
+		input_abs_set_val(data->input_dev_als, ABS_MISC, luxValue ? 0 : 1);
+		input_report_abs(data->input_dev_als, ABS_MISC, luxValue);
 		input_sync(data->input_dev_als);
 	}
 
@@ -1145,9 +1150,16 @@ static int apds993x_set_als_poll_delay(struct i2c_client *client,
 
 	pr_info("%s: val=%d\n", __func__, val);
 
+	/*
+	 * sensors.g2mv LightSensor::setDelay writes nanoseconds (Android
+	 * convention). Convert ns => ms for msecs_to_jiffies(). Accept
+	 * legacy microsecond values (< 1e6) too.
+	 */
+	if (val >= 1000000)
+		val = val / 1000;	/* ns → us */
 	/* minimum 5ms */
-	if (val < 3000)
-		val = 3000;
+	if (val < 5000)
+		val = 5000;
 
 	/* convert us => ms */
 	data->als_poll_delay = val / 1000;
@@ -1487,7 +1499,7 @@ static ssize_t apds993x_store_luxdata(struct device *dev,
 	struct apds993x_data *data = i2c_get_clientdata(client);
 	unsigned long val = simple_strtoul(buf, NULL, 10);
 
-	input_report_abs(data->input_dev_als, ABS_LIGHT, val);
+	input_report_abs(data->input_dev_als, ABS_MISC, val);
 	input_sync(data->input_dev_als);
 
 	return count;
@@ -1849,7 +1861,8 @@ static ssize_t apds993x_show_enable(struct device *dev,
 	struct i2c_client *client = to_i2c_client(dev);
 	struct apds993x_data *data = i2c_get_clientdata(client);
 
-	return sprintf(buf, "0x%x\n", data->enable);
+	/* CM sensors.g2mv LightSensor reads/writes 0/1 as ALS enable */
+	return sprintf(buf, "%d\n", data->enable_als_sensor ? 1 : 0);
 }
 
 static ssize_t apds993x_store_enable(struct device *dev,
@@ -1859,7 +1872,10 @@ static ssize_t apds993x_store_enable(struct device *dev,
 	unsigned long val = simple_strtoul(buf, NULL, 10);
 	int ret = 0;
 
-	ret = apds993x_set_enable(client, val);
+	if (val == 0 || val == 1)
+		ret = apds993x_enable_als_sensor(client, val);
+	else
+		ret = apds993x_set_enable(client, val);
 
 	if (ret < 0)
 		return ret;
@@ -1955,6 +1971,9 @@ static ssize_t apds993x_store_als_poll_delay(struct device *dev,
 
 static DEVICE_ATTR(als_poll_delay, S_IWUSR | S_IRUGO,
 		apds993x_show_als_poll_delay, apds993x_store_als_poll_delay);
+/* sensors.g2mv LightSensor::setDelay opens .../device/poll_delay */
+static DEVICE_ATTR(poll_delay, S_IWUSR | S_IRUGO,
+		apds993x_show_als_poll_delay, apds993x_store_als_poll_delay);
 #endif
 
 static struct attribute *apds993x_attributes[] = {
@@ -1976,6 +1995,7 @@ static struct attribute *apds993x_attributes[] = {
 	&dev_attr_enable_ps_sensor.attr,
 	&dev_attr_enable_als_sensor.attr,
 	&dev_attr_als_poll_delay.attr,
+	&dev_attr_poll_delay.attr,
 #endif
 	/*calibration*/
 	&dev_attr_status.attr,
@@ -2221,11 +2241,15 @@ static int apds993x_probe(struct i2c_client *client,
 	set_bit(EV_ABS, data->input_dev_als->evbit);
 	set_bit(EV_ABS, data->input_dev_ps->evbit);
 
-	input_set_abs_params(data->input_dev_als, ABS_LIGHT, 0, 10000, 0, 0);
+	/* sensors.g2mv.so LightSensor matches ABS_MISC (0x28) and name light_sensor */
+	input_set_abs_params(data->input_dev_als, ABS_MISC, 0, 10000, 0, 0);
 	input_set_abs_params(data->input_dev_ps, ABS_DISTANCE, 0, 1, 0, 0);
 
-	data->input_dev_als->name = "light";
+	data->input_dev_als->name = "light_sensor";
 	data->input_dev_ps->name = "proximity";
+	/* Parent so /sys/class/input/inputX/device → i2c client (enable/poll_delay). */
+	data->input_dev_als->dev.parent = &client->dev;
+	data->input_dev_ps->dev.parent = &client->dev;
 
 	err = input_register_device(data->input_dev_als);
 	if (err) {

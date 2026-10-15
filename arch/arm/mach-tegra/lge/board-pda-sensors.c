@@ -982,19 +982,7 @@ static void pda_hall_ic_init(void)
 #if defined(CONFIG_MACH_PDA)
 #include <linux/i2c/apds9x3x.h>
 
-/* APDS9130 */
-struct apds9130_platform_data apds9130_prox_data = {
-	.irq_gpio = APDS9130_INT,
-};
-
-static struct i2c_board_info __initdata apds9130_board_info[] = {
-	{
-		I2C_BOARD_INFO(APDS9130_NAME, APDS9130_ADDR),
-		.platform_data = &apds9130_prox_data,
-	},
-};
-
-/* APDS993X */
+/* APDS993X (ALS+PS). INT pin is PL2 on rev >= PDA_C, PN0 on older. */
 struct apds993x_platform_data apds993x_prox_data = {
 	.irq_gpio = APDS993X_INT,
 };
@@ -1009,41 +997,40 @@ static struct i2c_board_info __initdata apds993x_board_info[] = {
 
 static void pda_proximity_init(void)
 {
-/*                                                                                            
-                         
-                         
-                          
-                                                                                             */
-	if (lge_get_board_revno() < HW_REV_PDA_C) {
-		s32 ret = 0;
-		unsigned prox_int;
-		prox_int = APDS993X_INT;	 /*APDS9930 proximity interrupt*/
+	s32 ret = 0;
+	unsigned prox_int;
+	/*
+	 * Chip ID 0x39 is shared by APDS9930 (ALS+PS) and the 9130 driver.
+	 * Stock used apds9130 (PS only) for rev >= PDA_C, so CM's sensors HAL
+	 * never saw input "light_sensor" and auto-brightness stayed dead.
+	 * Always bind apds993x; later boards moved INT from PN0 to PL2.
+	 */
+	if (lge_get_board_revno() < HW_REV_PDA_C)
+		prox_int = APDS993X_INT;
+	else
+		prox_int = APDS9130_INT;
 
-		pr_info("proximity: PROXIMITY_INT GPIO(%d) IRQ(%d)\n",
-			prox_int, gpio_to_irq(prox_int));
+	apds993x_prox_data.irq_gpio = prox_int;
+	apds993x_board_info[0].irq = gpio_to_irq(prox_int);
 
-		ret = gpio_request(prox_int, "PROXIMITY_INT");
-		if (ret < 0)
-		{
-			pr_err("proximity: fail to gpio_request PROXIMITY_INT\n");
-			return;
-		}
+	pr_info("proximity: APDS993x INT GPIO(%d) IRQ(%d)\n",
+		prox_int, gpio_to_irq(prox_int));
 
-		ret = gpio_direction_input(prox_int);
-		if (ret < 0)
-		{
-			pr_err("proximity: fail to gpio_direction_input PROXIMITY_INT\n");
-			gpio_free(prox_int);
-			return;
-		}
-
-		i2c_register_board_info(APDS993X_BUS_NUM,
-			apds993x_board_info, ARRAY_SIZE(apds993x_board_info));
-	} else {
-		i2c_register_board_info(APDS9130_BUS_NUM,
-			apds9130_board_info, ARRAY_SIZE(apds9130_board_info));
-		printk("%s : apds9130 enable \n", __func__);
+	ret = gpio_request(prox_int, "PROXIMITY_INT");
+	if (ret < 0) {
+		pr_err("proximity: fail to gpio_request PROXIMITY_INT\n");
+		return;
 	}
+
+	ret = gpio_direction_input(prox_int);
+	if (ret < 0) {
+		pr_err("proximity: fail to gpio_direction_input PROXIMITY_INT\n");
+		gpio_free(prox_int);
+		return;
+	}
+
+	i2c_register_board_info(APDS993X_BUS_NUM,
+		apds993x_board_info, ARRAY_SIZE(apds993x_board_info));
 }
 #endif
 
