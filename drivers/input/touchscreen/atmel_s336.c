@@ -138,6 +138,31 @@ static void mxt_knock_on_report_power(struct mxt_data *data)
 	input_sync(input_dev);
 	input_report_key(input_dev, KEY_WAKEUP, 0);
 	input_sync(input_dev);
+
+	/*
+	 * Detection switched the chip to active mode on the assumption that the
+	 * screen turns on. If userspace declines (proximity check: pocket), no
+	 * fb suspend follows to re-arm gestures and KnockON goes dead until the
+	 * next screen on/off. Re-arm if we are still suspended a bit later.
+	 */
+	cancel_delayed_work(&data->work_knock_rearm);
+	queue_delayed_work(touch_wq, &data->work_knock_rearm,
+			msecs_to_jiffies(1500));
+}
+
+static void mxt_knock_rearm_func(struct work_struct *work)
+{
+	struct mxt_data *data = container_of(to_delayed_work(work),
+			struct mxt_data, work_knock_rearm);
+
+	mutex_lock(&data->input_dev->mutex);
+	if (data->suspended && !data->in_bootloader &&
+			data->lpwg_mode == LPWG_DOUBLE_TAP) {
+		TOUCH_INFO_MSG("KnockON: still suspended, re-arm gesture mode\n");
+		mxt_reset_slots(data);
+		mxt_gesture_mode_start(data);
+	}
+	mutex_unlock(&data->input_dev->mutex);
 }
 
 
@@ -6561,6 +6586,7 @@ static int __devinit mxt_probe(struct i2c_client *client, const struct i2c_devic
 	INIT_DELAYED_WORK(&data->work_button_lock, mxt_button_lock_func);
 	INIT_DELAYED_WORK(&data->work_palm_unlock, mxt_palm_unlock_func);
 	INIT_DELAYED_WORK(&data->work_deepsleep, mxt_deepsleep_func);
+	INIT_DELAYED_WORK(&data->work_knock_rearm, mxt_knock_rearm_func);
 
 	data->fb_notif.notifier_call = fb_notifier_callback;
 

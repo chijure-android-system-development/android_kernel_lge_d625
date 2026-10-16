@@ -690,6 +690,7 @@ struct mxt_data {
 	struct delayed_work	work_button_lock;
 	struct delayed_work	work_palm_unlock;
 	struct delayed_work	work_deepsleep;
+	struct delayed_work	work_knock_rearm;
 	u8	work_deepsleep_enabled;
 	u8 mfts_enable;
 	u8 charging_mode; /*Charger mode in patch*/
