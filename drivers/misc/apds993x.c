@@ -227,6 +227,7 @@ struct apds993x_data {
 	struct i2c_client *client;
 	struct delayed_work	dwork;		/* for PS interrupt */
 	struct delayed_work	als_dwork;	/* for ALS polling */
+	struct delayed_work	ps_init_dwork;	/* first PS event after enable */
 	struct input_dev *input_dev_als;
 	struct input_dev *input_dev_ps;
 
@@ -1199,14 +1200,14 @@ static int apds993x_set_als_poll_delay(struct i2c_client *client,
 #endif
 
 /*
- * Report the real near/far state right after PS is enabled. Enable only
- * computed thresholds without writing PILT/PIHT (both 0), so the first
- * interrupt always claimed "near" and the HAL's initial state was the stale
- * last value. Callers that sample once on enable (CM's proximity check on
- * wake, in-call screen) then acted on old data. Wait for the first valid PS
- * cycle, report it and arm the matching thresholds.
+ * Measure the real near/far state right after PS is enabled and arm the
+ * matching thresholds. LG's enable left PILT/PIHT at 0 so the first
+ * interrupt always claimed "near", and the HAL's initial state was stale;
+ * callers that sample once on enable (CM's proximity check on wake, in-call
+ * screen) then acted on wrong data. The event itself is sent later by
+ * apds993x_ps_init_work_handler().
  */
-static void apds993x_ps_report_initial(struct i2c_client *client)
+static void apds993x_ps_measure_initial(struct i2c_client *client)
 {
 	struct apds993x_data *data = i2c_get_clientdata(client);
 	int status = 0;
@@ -1228,14 +1229,6 @@ static void apds993x_ps_report_initial(struct i2c_client *client)
 
 	data->ps_detection = near ? 1 : 0;
 	apds993x_proxidata = data->ps_detection;
-	/*
-	 * Always emit an event: the input core drops unchanged ABS values and
-	 * the HAL no longer invents an initial "far" (sensors.g2mv.so), so the
-	 * first event a listener sees must come from here.
-	 */
-	input_abs_set_val(data->input_dev_ps, ABS_DISTANCE, -1);
-	input_report_abs(data->input_dev_ps, ABS_DISTANCE, near ? 0 : 5);
-	input_sync(data->input_dev_ps);
 
 	if (near) {
 		apds993x_set_pilt(client, data->ps_hysteresis_threshold);
@@ -1244,11 +1237,33 @@ static void apds993x_ps_report_initial(struct i2c_client *client)
 		apds993x_set_pilt(client, 0);
 		apds993x_set_piht(client, data->ps_threshold);
 	}
-	/* drop the interrupt latched by the old 0/0 thresholds */
 	apds993x_set_command(client, 0);	/* CMD_CLR_PS_INT */
 
 	pr_info("%s: ps_data(%d) status(0x%x) tries(%d) -> %s\n", __func__,
 		data->ps_data, status, tries, near ? "near" : "far");
+}
+
+/*
+ * Send the first PS event a little after enable. An event raised inside the
+ * enable call reaches KitKat's SystemSensorManager before the listener has
+ * added the sensor to its event table and is dropped, so CM's 250 ms
+ * proximity check timed out and woke the screen in a pocket. Always emit:
+ * the input core drops unchanged ABS values, and the HAL no longer invents
+ * an initial "far" (sensors.g2mv.so is patched).
+ */
+static void apds993x_ps_init_work_handler(struct work_struct *work)
+{
+	struct apds993x_data *data = container_of(work, struct apds993x_data,
+			ps_init_dwork.work);
+
+	if (!data->enable_ps_sensor)
+		return;
+
+	input_abs_set_val(data->input_dev_ps, ABS_DISTANCE, -1);
+	input_report_abs(data->input_dev_ps, ABS_DISTANCE,
+			data->ps_detection ? 0 : 5);
+	input_sync(data->input_dev_ps);
+	pr_info("%s: %s\n", __func__, data->ps_detection ? "near" : "far");
 }
 
 static int apds993x_enable_ps_sensor(struct i2c_client *client, int val)
@@ -1276,6 +1291,9 @@ static int apds993x_enable_ps_sensor(struct i2c_client *client, int val)
 			/*calirbation*/
 			apds993x_set_ps_threshold_adding_cross_talk(client,
 					data->cross_talk);
+			/* start armed for "far" so no bogus first interrupt */
+			apds993x_set_pilt(client, 0);
+			apds993x_set_piht(client, data->ps_threshold);
 
 			if (data->enable_als_sensor == 0) {
 				/* only enable PS interrupt */
@@ -1290,7 +1308,9 @@ static int apds993x_enable_ps_sensor(struct i2c_client *client, int val)
 				apds993x_set_enable(client, 0x37);
 #endif
 			}
-			apds993x_ps_report_initial(client);
+			apds993x_ps_measure_initial(client);
+			queue_delayed_work(apds993x_workqueue,
+					&data->ps_init_dwork, msecs_to_jiffies(40));
 		}
 	}
 	else {
@@ -1300,6 +1320,7 @@ static int apds993x_enable_ps_sensor(struct i2c_client *client, int val)
 		 * the light sensor may be needed by HAL
 		 */
 		data->enable_ps_sensor = 0;
+		cancel_delayed_work(&data->ps_init_dwork);
 		if (data->enable_als_sensor) {
 #ifdef ALS_POLLING_ENABLED
 			/* no ALS interrupt */
@@ -2271,6 +2292,7 @@ static int apds993x_probe(struct i2c_client *client,
 	irq_set_irq_wake(client->irq, 1);
 
 	INIT_DELAYED_WORK(&data->dwork, apds993x_work_handler);
+	INIT_DELAYED_WORK(&data->ps_init_dwork, apds993x_ps_init_work_handler);
 #ifdef ALS_POLLING_ENABLED
 	INIT_DELAYED_WORK(&data->als_dwork, apds993x_als_polling_work_handler);
 #endif
