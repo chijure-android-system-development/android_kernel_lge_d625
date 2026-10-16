@@ -1228,6 +1228,12 @@ static void apds993x_ps_report_initial(struct i2c_client *client)
 
 	data->ps_detection = near ? 1 : 0;
 	apds993x_proxidata = data->ps_detection;
+	/*
+	 * Always emit an event: the input core drops unchanged ABS values and
+	 * the HAL no longer invents an initial "far" (sensors.g2mv.so), so the
+	 * first event a listener sees must come from here.
+	 */
+	input_abs_set_val(data->input_dev_ps, ABS_DISTANCE, -1);
 	input_report_abs(data->input_dev_ps, ABS_DISTANCE, near ? 0 : 5);
 	input_sync(data->input_dev_ps);
 
