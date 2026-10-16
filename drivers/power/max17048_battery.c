@@ -228,7 +228,19 @@ static int max17048_get_property(struct power_supply *psy,
 		    //printk("[charger] Fake mode\n");
 		    val->intval = pseudo_batt_info.volt * 1000;
 	     }else{
-		    val->intval = chip->vcell * 1000; // this is orignal.
+		    /*
+		     * Read VCELL live instead of the value cached by the 30 s
+		     * work, so userspace can see voltage sag under load (a
+		     * worn battery dips below the PMIC cutoff and resets the
+		     * phone). The cached chip->vcell keeps feeding the
+		     * driver's own logic.
+		     */
+		    int raw = max17048_read_word(chip->client, MAX17048_VCELL);
+
+		    if (raw >= 0)
+			    val->intval = (((raw >> 4) * 125) / 100) * 1000;
+		    else
+			    val->intval = chip->vcell * 1000;
 	     }
 #endif
     /*                                          */
