@@ -1198,6 +1198,53 @@ static int apds993x_set_als_poll_delay(struct i2c_client *client,
 }
 #endif
 
+/*
+ * Report the real near/far state right after PS is enabled. Enable only
+ * computed thresholds without writing PILT/PIHT (both 0), so the first
+ * interrupt always claimed "near" and the HAL's initial state was the stale
+ * last value. Callers that sample once on enable (CM's proximity check on
+ * wake, in-call screen) then acted on old data. Wait for the first valid PS
+ * cycle, report it and arm the matching thresholds.
+ */
+static void apds993x_ps_report_initial(struct i2c_client *client)
+{
+	struct apds993x_data *data = i2c_get_clientdata(client);
+	int status = 0;
+	int tries;
+	bool near;
+
+	for (tries = 0; tries < 20; tries++) {
+		status = i2c_smbus_read_byte_data(client,
+				CMD_BYTE|APDS993X_STATUS_REG);
+		if (status >= 0 && (status & 0x02))	/* PVALID */
+			break;
+		usleep_range(2000, 3000);
+	}
+
+	data->ps_data = i2c_smbus_read_word_data(client,
+			CMD_WORD|APDS993X_PDATAL_REG);
+	near = (status >= 0) && !(status & 0x40) &&	/* not saturated */
+		data->ps_data >= data->ps_threshold;
+
+	data->ps_detection = near ? 1 : 0;
+	apds993x_proxidata = data->ps_detection;
+	input_report_abs(data->input_dev_ps, ABS_DISTANCE, near ? 0 : 5);
+	input_sync(data->input_dev_ps);
+
+	if (near) {
+		apds993x_set_pilt(client, data->ps_hysteresis_threshold);
+		apds993x_set_piht(client, 1023);
+	} else {
+		apds993x_set_pilt(client, 0);
+		apds993x_set_piht(client, data->ps_threshold);
+	}
+	/* drop the interrupt latched by the old 0/0 thresholds */
+	apds993x_set_command(client, 0);	/* CMD_CLR_PS_INT */
+
+	pr_info("%s: ps_data(%d) status(0x%x) tries(%d) -> %s\n", __func__,
+		data->ps_data, status, tries, near ? "near" : "far");
+}
+
 static int apds993x_enable_ps_sensor(struct i2c_client *client, int val)
 {
 	struct apds993x_data *data = i2c_get_clientdata(client);
@@ -1237,6 +1284,7 @@ static int apds993x_enable_ps_sensor(struct i2c_client *client, int val)
 				apds993x_set_enable(client, 0x37);
 #endif
 			}
+			apds993x_ps_report_initial(client);
 		}
 	}
 	else {
