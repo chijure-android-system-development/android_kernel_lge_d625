@@ -371,6 +371,13 @@ static int rt8542_nvc_release(struct inode *inode, struct file *file)
 {
 	struct rt8542_fled_info *fi = file->private_data;
 
+	/*
+	 * The camera HAL can close without a PWR_WR off (e.g. video with
+	 * torch), which left the LED lit after the camera was gone. The HAL
+	 * owns the flash while the node is open; switch it off on close.
+	 */
+	rt8542_set_fl_brightness2(0);
+
 	file->private_data = NULL;
 	WARN_ON(!atomic_xchg(&fi->in_use, 0));
 	printk(KERN_DEBUG "%s\n", __func__);
