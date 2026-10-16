@@ -122,9 +122,10 @@ static void mxt_gesture_mode_start(struct mxt_data *data);
 
 /*
  * LG's framework wakes the screen on the TOUCH_GESTURE_WAKEUP uevent; CM has
- * no listener for it. Report a POWER key press as CyanogenMod's msm8226
- * atmel_s336 does, so the input reader wakes the device. Only while
- * suspended, where it can only mean "turn on".
+ * no listener for it. Report KEY_WAKEUP instead (CyanogenMod's msm8226
+ * atmel_s336 used KEY_POWER). The device keylayout leaves it unmapped and the
+ * CM DeviceKeyHandler wakes with a proximity check, so a pocket does not turn
+ * the screen on. Only while suspended, where it can only mean "turn on".
  */
 static void mxt_knock_on_report_power(struct mxt_data *data)
 {
@@ -133,9 +134,9 @@ static void mxt_knock_on_report_power(struct mxt_data *data)
 	if (!input_dev || !data->suspended)
 		return;
 
-	input_report_key(input_dev, KEY_POWER, 1);
+	input_report_key(input_dev, KEY_WAKEUP, 1);
 	input_sync(input_dev);
-	input_report_key(input_dev, KEY_POWER, 0);
+	input_report_key(input_dev, KEY_WAKEUP, 0);
 	input_sync(input_dev);
 }
 
@@ -5512,7 +5513,7 @@ int mxt_initialize_t9_input_device(struct mxt_data *data)
 
 	__set_bit(EV_ABS, input_dev->evbit);
 	/* KnockON wake key, see mxt_knock_on_report_power() */
-	input_set_capability(input_dev, EV_KEY, KEY_POWER);
+	input_set_capability(input_dev, EV_KEY, KEY_WAKEUP);
 	if(data->pdata->butt_check_enable)
 		input_set_capability(input_dev, EV_KEY, BTN_TOUCH);
 
