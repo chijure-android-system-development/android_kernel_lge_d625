@@ -462,7 +462,8 @@ EXPORT_SYMBOL(rt8542_internal_set_fl_mode);
 static void rt8542_apply_fl_brightness(struct rt8542_fled_info *fi,
 					enum led_brightness brightness)
 {
-	fi->brightness = brightness;
+	int ext = fi->external_strobe_pin && fi->strobe_gpio;
+	int was_strobe = fi->brightness >= 255;
 
 	if (brightness) {
 		/* 255 = strobe/flash; any other non-zero = torch. Torch apps
@@ -471,28 +472,40 @@ static void rt8542_apply_fl_brightness(struct rt8542_fled_info *fi,
 		 */
 		int strobe = brightness >= 255;
 
-		if (strobe)
-			rt8542_fled_mode(fi->i2c, fi->external_strobe_pin,
-					 FLED_MODE_STROBE);
-		else
-			rt8542_fled_mode(fi->i2c, fi->external_strobe_pin,
-					 FLED_MODE_TORCH);
+		/* Torch rewrites its level every 100 ms; don't blink the LED. */
+		if (fi->chip->fled_en && fi->brightness && was_strobe == strobe) {
+			fi->brightness = brightness;
+			return;
+		}
+		fi->brightness = brightness;
+
+		/*
+		 * With the external strobe input armed (FLCTL2), the LED is lit
+		 * only while the strobe GPIO is high, in torch and flash mode
+		 * alike; the mode only selects the current. Never change mode
+		 * with the pin high: drop it, program mode, enable, then raise.
+		 */
+		if (ext)
+			gpio_direction_output(fi->strobe_gpio, 0);
+
+		rt8542_fled_mode(fi->i2c, fi->external_strobe_pin,
+				 strobe ? FLED_MODE_STROBE : FLED_MODE_TORCH);
 
 		if (!fi->chip->fled_en) {
 			rt8542_fled_enable(fi->i2c, 1);
 			fi->chip->fled_en = 1;
 		}
 
-		/* Assert strobe GPIO only for flash. Torch must stay low —
-		 * fled_enable used to drive GPIO high for both and POR'd.
-		 */
-		if (fi->external_strobe_pin && fi->strobe_gpio)
-			gpio_direction_output(fi->strobe_gpio, strobe ? 1 : 0);
-	} else if (fi->chip->fled_en) {
-		if (fi->external_strobe_pin && fi->strobe_gpio)
-			gpio_direction_output(fi->strobe_gpio, 0);
-		rt8542_fled_enable(fi->i2c, 0);
-		fi->chip->fled_en = 0;
+		if (ext)
+			gpio_direction_output(fi->strobe_gpio, 1);
+	} else {
+		fi->brightness = 0;
+		if (fi->chip->fled_en) {
+			if (ext)
+				gpio_direction_output(fi->strobe_gpio, 0);
+			rt8542_fled_enable(fi->i2c, 0);
+			fi->chip->fled_en = 0;
+		}
 	}
 }
 
