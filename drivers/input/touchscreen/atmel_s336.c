@@ -120,6 +120,25 @@ static enum hrtimer_restart tci_timer_func(struct hrtimer *multi_tap_timer)
 static void mxt_active_mode_start(struct mxt_data *data);
 static void mxt_gesture_mode_start(struct mxt_data *data);
 
+/*
+ * LG's framework wakes the screen on the TOUCH_GESTURE_WAKEUP uevent; CM has
+ * no listener for it. Report a POWER key press as CyanogenMod's msm8226
+ * atmel_s336 does, so the input reader wakes the device. Only while
+ * suspended, where it can only mean "turn on".
+ */
+static void mxt_knock_on_report_power(struct mxt_data *data)
+{
+	struct input_dev *input_dev = data->input_dev;
+
+	if (!input_dev || !data->suspended)
+		return;
+
+	input_report_key(input_dev, KEY_POWER, 1);
+	input_sync(input_dev);
+	input_report_key(input_dev, KEY_POWER, 0);
+	input_sync(input_dev);
+}
+
 
 static void touch_multi_tap_work(struct work_struct *multi_tap_work)
 {
@@ -2091,6 +2110,7 @@ static void mxt_proc_t93_messages(struct mxt_data *data, u8 *message)
 				hrtimer_start(&data->multi_tap_timer, ktime_set(0, MS_TO_NS(MXT_WAITED_UDF_TIME)), HRTIMER_MODE_REL);
 		} else if (data->lpwg_mode == LPWG_DOUBLE_TAP) {
 			send_uevent(knockon_event);
+			mxt_knock_on_report_power(data);
 		}
 	}
 }
@@ -2121,6 +2141,7 @@ static void mxt_proc_t24_messages(struct mxt_data *data, u8 *message)
 		wake_lock_timeout(&touch_wake_lock, msecs_to_jiffies(2000));
 		TOUCH_INFO_MSG("Knock On detected x[%3d] y[%3d] \n", x, y);
 		kobject_uevent_env(&lge_touch_sys_device.kobj, KOBJ_CHANGE, knockon_event);
+		mxt_knock_on_report_power(data);
 	} else {
 		TOUCH_INFO_MSG("%s msg = %d \n", __func__, msg);
 	}
@@ -4525,6 +4546,9 @@ static void mxt_lpwg_disable(struct mxt_data *data, u32 value)
 		touch_disable_irq_wake(data->irq);
 		touch_disable_irq(data->irq);
 		data->enable_reporting = false;
+		/* Otherwise the next suspend re-arms the gesture. */
+		data->mxt_knock_on_enable = false;
+		data->mxt_multi_tap_enable = false;
 	} else {
 		if (value == LPWG_NONE) {
 			data->mxt_knock_on_enable= false;
@@ -5487,6 +5511,8 @@ int mxt_initialize_t9_input_device(struct mxt_data *data)
 	input_dev->close = mxt_input_close;
 
 	__set_bit(EV_ABS, input_dev->evbit);
+	/* KnockON wake key, see mxt_knock_on_report_power() */
+	input_set_capability(input_dev, EV_KEY, KEY_POWER);
 	if(data->pdata->butt_check_enable)
 		input_set_capability(input_dev, EV_KEY, BTN_TOUCH);
 
